@@ -1,0 +1,34 @@
+name: Refresh Compendium
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: compendium-data
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch and parse all Compendium tabs
+        run: node runner.mjs compendium.json
+      - name: Commit only changed content
+        run: |
+          git add compendium.json
+          if git diff --cached --quiet; then
+            echo "Compendium is up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Refresh styled Compendium data"
+          git push origin HEAD:main
