@@ -1,8 +1,13 @@
 name: Refresh Compendium
 on:
   schedule:
-    - cron: '17 5 * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      allow_shrink:
+        description: Accept a deliberate sharp drop in tab rows (20%+) or a removed tab
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -20,6 +25,8 @@ jobs:
         with:
           node-version: 24
       - name: Fetch and parse all Compendium tabs
+        env:
+          COMPENDIUM_ALLOW_SHRINK: ${{ inputs.allow_shrink && '1' || '' }}
         run: node runner.mjs compendium.json
       - name: Commit only changed content
         run: |

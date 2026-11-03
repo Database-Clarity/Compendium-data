@@ -19,12 +19,30 @@ export async function fetchHtml(url) {
   }
   throw new Error(`Compendium retries exhausted: ${url}`);
 }
+const shrinkMinRows = 10;
+const shrinkMaxLoss = 0.2;
+/** Names tabs whose rows dropped sharply (or vanished) versus the previous snapshot. */
+export function shrunkTabs(previous, sheets) {
+  // A retired tab is renamed "OLD X" and recreated as "X" under a new gid, so fall back to the name.
+  const byGid = new Map(sheets.map((sheet) => [sheet.gid, sheet.rows.length]));
+  const byName = new Map(sheets.map((sheet) => [sheet.name, sheet.rows.length]));
+  const shrunk = [];
+  for (const old of previous?.tabs ?? []) {
+    if (old.rows.length < shrinkMinRows) continue;
+    const rows = byGid.get(old.gid) ?? byName.get(old.name) ?? 0;
+    if (rows < old.rows.length * (1 - shrinkMaxLoss)) {
+      shrunk.push(`${old.name} ${old.rows.length}→${rows}`);
+    }
+  }
+  return shrunk;
+}
 export async function buildCompendium({
   parser,
   load = fetchHtml,
   previous,
   now = new Date().toISOString(),
   onTab = () => {},
+  allowShrink = process.env.COMPENDIUM_ALLOW_SHRINK === '1',
 } = {}) {
   parser ??= await import('./parser.mjs');
   if (previous) parser.compendiumDataSchema.parse(previous);
@@ -43,6 +61,13 @@ export async function buildCompendium({
     }
     sheets.push(sheet);
     onTab(sheet);
+  }
+  const shrunk = allowShrink ? [] : shrunkTabs(previous, sheets);
+  if (shrunk.length) {
+    throw new Error(
+      `Compendium tabs shrank sharply (${shrunk.join(', ')}); keeping the last good data. ` +
+        'Re-run the workflow manually with allow_shrink enabled (COMPENDIUM_ALLOW_SHRINK=1) if this is deliberate',
+    );
   }
   const next = parser.compendiumDataSchema.parse({ fetchedAt: now, tabs: sheets });
   if (previous && parser.stableStringify(previous.tabs) === parser.stableStringify(next.tabs)) {
