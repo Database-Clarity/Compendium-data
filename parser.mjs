@@ -6,7 +6,7 @@ var __export = (target, all) => {
 
 // packages/core/src/compendium/config.ts
 function isTrackedCompendiumTab(name) {
-  return !name.includes("OLD");
+  return !/(^|[^A-Za-z0-9])OLD($|[^A-Za-z0-9])/.test(name);
 }
 var glossary = {
   nameColumns: [1],
@@ -113,15 +113,13 @@ var compendiumCategoryTabs = {
   "weapon-trait": ["1662574278"],
   "weapon-trait-enhanced": ["1662574278"],
   "weapon-trait-exotic": ["441434520"],
-  "weapon-trait-enhanced-exotic": ["441434520"],
   "weapon-trait-origin": ["1662574278"],
-  "weapon-trait-origin-exotic": ["1662574278"],
   "weapon-frame": ["1662574278"],
   "weapon-frame-enhanced": ["1662574278"],
   "weapon-frame-exotic": ["441434520"],
-  "weapon-frame-enhanced-exotic": ["441434520"],
   "weapon-catalyst-exotic": ["441434520"],
   "weapon-mod": ["1662574278"],
+  "armor-set-bonus": ["1287885342"],
   "armor-trait-exotic": ["1500097863", "20898389"],
   "armor-mod-general": ["1934379638", "1925335732"],
   "armor-mod-combat": ["1934379638", "1925335732"],
@@ -8316,6 +8314,10 @@ function colour(value) {
 }
 function apply(style, css) {
   const next = { ...style };
+  const alignment = css["text-align"];
+  if (["left", "center", "right", "justify", "start", "end"].includes(alignment))
+    next.textAlign = alignment;
+  else if (alignment === "initial") delete next.textAlign;
   if (css.color && css.color !== "inherit") {
     const color = colour(css.color);
     if (!color) throw new Error(`Unsupported Compendium text colour: ${css.color}`);
@@ -8356,6 +8358,18 @@ function resolveStyle(node2, parent, rules) {
   for (const rule of rules)
     if (matches(node2, rule.selector)) style = apply(style, rule.declarations);
   return apply(style, declarations(attr(node2, "style")));
+}
+function resolveBackground(node2, rules) {
+  let background;
+  const take = (css) => {
+    const value = css["background-color"] ?? css.background;
+    if (!value) return;
+    const resolved = colour(value);
+    background = resolved?.length === 7 ? resolved : void 0;
+  };
+  for (const rule of rules) if (matches(node2, rule.selector)) take(rule.declarations);
+  take(declarations(attr(node2, "style")));
+  return background;
 }
 function safeHref(value) {
   if (!value) return void 0;
@@ -28089,6 +28103,8 @@ function date4(params) {
 
 // packages/core/src/compendium/types.ts
 var compendiumStyleSchema = external_exports.object({
+  // Carried on runs so concatenated source cells retain their own line alignment.
+  textAlign: external_exports.enum(["left", "center", "right", "justify", "start", "end"]).optional(),
   color: external_exports.string().regex(/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/).optional(),
   bold: external_exports.literal(true).optional(),
   italic: external_exports.literal(true).optional(),
@@ -28100,7 +28116,10 @@ var compendiumStyleSchema = external_exports.object({
 var compendiumRunSchema = compendiumStyleSchema.extend({ text: external_exports.string() });
 var compendiumCellSchema = external_exports.object({
   plain: external_exports.string(),
-  runs: external_exports.array(compendiumRunSchema)
+  runs: external_exports.array(compendiumRunSchema),
+  // The cell's own background in the source sheet. Display only: never part of the cell's
+  // identity (sameCell ignores it) and never stored in a link snapshot.
+  background: external_exports.string().regex(/^#[0-9a-f]{6}$/).optional()
 }).strict().refine(
   (cell) => cell.runs.map((run) => run.text).join("") === cell.plain,
   "Compendium plain text must match its runs"
@@ -28148,7 +28167,8 @@ var compendiumLinkSchema = external_exports.object({
   snapshot: compendiumCellSchema,
   snapshotAt: external_exports.string().datetime({ offset: true }),
   cells: compendiumCellOffsetsSchema.optional(),
-  parts: external_exports.array(external_exports.string()).optional()
+  parts: external_exports.array(external_exports.string()).optional(),
+  setBonusPieces: external_exports.union([external_exports.literal(2), external_exports.literal(4)]).optional()
 }).strict();
 function styleKey(run) {
   return JSON.stringify(
@@ -28164,6 +28184,10 @@ function normaliseRuns(runs) {
     else merged.push({ ...run });
   }
   return { plain: merged.map((run) => run.text).join(""), runs: merged };
+}
+function withBackground(cell, background) {
+  const rest = { plain: cell.plain, runs: cell.runs };
+  return background ? { ...rest, background } : rest;
 }
 
 // packages/core/src/compendium/resolve.ts
@@ -28212,7 +28236,10 @@ function parseCompendiumGrid(html) {
       (style, ancestor) => resolveStyle(ancestor, style, rules),
       {}
     );
-    return normaliseRuns(runs(element, inherited));
+    return withBackground(
+      normaliseRuns(runs(element, inherited)),
+      resolveBackground(element, rules)
+    );
   }
   const table = descendants(document, "table").find(
     (node2) => attr(node2, "class").split(/\s+/).includes("waffle")
@@ -28327,6 +28354,7 @@ function parseCompendiumSheet(html, tab, tabName) {
   let groups = config2?.cards ? config2.groups : void 0;
   let section;
   const rows = [];
+  const armorCards = /* @__PURE__ */ new Map();
   const sources = /* @__PURE__ */ new Map();
   const seenDescriptions = /* @__PURE__ */ new Map();
   for (const [gridIndex, { row, cells }] of grid.entries()) {
@@ -28370,17 +28398,33 @@ function parseCompendiumSheet(html, tab, tabName) {
       );
       const rowKey = names.map((entry) => entry.cell.plain.trim()).filter(Boolean).join(" ");
       if (!name || !rowKey || !descriptions.length) continue;
+      if (config2?.name === "Exotic Armors") {
+        const key = `${name.col}:${normaliseCompendiumName(rowKey)}`;
+        const previous = armorCards.get(key);
+        if (previous && previous.length === descriptions.length && descriptions.every((entry, index) => entry.element === previous[index]))
+          continue;
+        armorCards.set(
+          key,
+          descriptions.map((entry) => entry.element)
+        );
+      }
       for (const description of descriptions) seen.add(description.element);
       seenDescriptions.set(name.element, seen);
-      const combined = normaliseRuns(
-        descriptions.flatMap((entry, index) => [
-          ...index ? [{ text: "\n" }] : [],
-          ...entry.cell.runs
-        ])
+      const combined = withBackground(
+        normaliseRuns(
+          descriptions.flatMap((entry, index) => [
+            ...index ? [{ text: "\n" }] : [],
+            ...entry.cell.runs
+          ])
+        ),
+        descriptions[0].cell.background
       );
       const existing = sources.get(name.element);
       if (existing) {
-        existing.cell = normaliseRuns([...existing.cell.runs, { text: "\n" }, ...combined.runs]);
+        existing.cell = withBackground(
+          normaliseRuns([...existing.cell.runs, { text: "\n" }, ...combined.runs]),
+          existing.cell.background
+        );
       } else {
         const entry = {
           name: rowKey,
@@ -28478,43 +28522,6 @@ var statSchema = external_exports.object({
 }).strict();
 var legacyStatsSchema = external_exports.partialRecord(external_exports.enum(statNames), external_exports.array(statSchema));
 
-// packages/core/src/markup/syntax.ts
-var markupColors = ["blue", "green", "purple", "yellow", "center", "bold", "pve", "pvp"];
-var markupEmpty = ["background", "breakSpaces", "bold"];
-var markupLineClasses = [...markupColors, ...markupEmpty];
-var weaponTypeNames = [
-  "Auto Rifle",
-  "Combat Bow",
-  "Fusion Rifle",
-  "Glaive",
-  "Grenade Launcher",
-  "Hand Cannon",
-  "Linear Fusion Rifle",
-  "Machine Gun",
-  "Pulse Rifle",
-  "Rocket Launcher",
-  "Scout Rifle",
-  "Shotgun",
-  "Sidearm",
-  "Sniper Rifle",
-  "Submachine Gun",
-  "Sword",
-  "Trace Rifle"
-];
-var weaponTypeExtraTags = ["Grenade", "Melee", "Super", "Heavy Grenade Launcher"];
-var markupWeaponTypes = [...weaponTypeNames, ...weaponTypeExtraTags];
-
-// packages/core/src/markup/specialize.ts
-var weaponTypeLabelsSchema = external_exports.record(
-  external_exports.string(),
-  external_exports.record(external_exports.string(), external_exports.string()).refine((labels) => typeof labels.en === "string", {
-    message: "Weapon type labels need an English entry"
-  })
-);
-var englishWeaponTypeLabels = Object.fromEntries(
-  markupWeaponTypes.map((name) => [name, { en: name }])
-);
-
 // packages/core/src/legacy.ts
 var hashSchema = external_exports.number().int().min(0).max(4294967295);
 var trackerEntrySchema = external_exports.object({
@@ -28561,7 +28568,8 @@ var legacyDatabaseSchema = external_exports.object({
       name: external_exports.string(),
       linkedWith: hashSchema
     }).strict()),
-    weaponTypeLabels: weaponTypeLabelsSchema.optional()
+    // Accept retired settings as inert input; malformed labels cannot block migration.
+    weaponTypeLabels: external_exports.unknown().optional()
   }).strict()
 }).strict().superRefine(({ perks }, context) => {
   for (const [hash2, perk] of Object.entries(perks)) {
@@ -28588,6 +28596,17 @@ var tooltipSchema = external_exports.object({
   bungieSnapshot: external_exports.object({
     description: external_exports.string(),
     snapshotAt: timestampSchema
+  }).strict().optional(),
+  archive: external_exports.object({
+    removedAt: timestampSchema,
+    lastSeen: external_exports.object({
+      name: external_exports.string(),
+      categoryId: external_exports.string(),
+      icon: external_exports.string().optional(),
+      manifestVersion: external_exports.string()
+    }).strict(),
+    successor: hashSchema.optional(),
+    note: external_exports.string().optional()
   }).strict().optional(),
   legacy: legacyMetadataSchema.optional()
 }).strict();
