@@ -10,6 +10,7 @@ on:
         default: false
 permissions:
   contents: write
+  actions: read
 concurrency:
   group: compendium-data
   cancel-in-progress: false
@@ -25,9 +26,19 @@ jobs:
         with:
           node-version: 24
       - name: Fetch and parse all Compendium tabs
+        id: refresh
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           COMPENDIUM_ALLOW_SHRINK: ${{ inputs.allow_shrink && '1' || '' }}
         run: node runner.mjs compendium.json
+      - name: Upload refresh evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compendium-refresh-${{ steps.refresh.outputs.good == 'true' && 'good' || 'rejected' }}
+          path: ${{ runner.temp }}/compendium-refresh/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Commit only changed content
         run: |
           git add compendium.json
