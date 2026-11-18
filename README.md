@@ -21,6 +21,12 @@ Actions status as well as this timestamp so an unchanged refresh can complete.
 No class names, raw HTML, scripts or arbitrary CSS are stored in the dataset.
 The bundled parser's MIT third-party notices must remain in `parser.mjs`.
 
+Google can return a tab as several `waffle` tables within one `grid-container`.
+The parser reads all of those chunks in document order, sharing merged-cell
+occupancy and keeping the original row headers, styles, and coordinates.
+The HTML already contains the full tab; retrying the first table alone cannot
+recover the continuation rows. The sharp-shrink guard remains a safety net.
+
 ## Updating the parser
 
 From a reviewed, committed editor checkout, with dependencies restored:
@@ -34,6 +40,9 @@ commit in `parser-source.txt`. Copy this workflow to
 `.github/workflows/compendium.yml`. Review, test and explicitly approve publishing
 that commit separately from editor integration. The published runner needs only
 Node 24: no install, npm credentials or runtime dependencies.
+`parser-source.txt` identifies the upstream bundle's base commit. This repository
+also patches `parseCompendiumGrid` to read `grid-chunk` continuation tables;
+preserve that patch when regenerating until it is included in the editor core.
 
 ```powershell
 node runner.mjs compendium.json
