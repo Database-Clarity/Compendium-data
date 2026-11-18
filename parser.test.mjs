@@ -39,6 +39,9 @@ test('only waffle tables in the selected grid are read', () => {
 });
 
 test('the original plain-table fallback is unchanged', () => {
-  assert.equal(JSON.stringify(parse(table(heading + first + second + third, 'plain'))),
+  const expected = JSON.stringify(parse(table(heading + first + second + third, 'plain')));
+  assert.equal(expected,
     JSON.stringify(parse(table(heading + first + second + third, 'plain') + table(third, 'plain'))));
+  assert.equal(expected,
+    JSON.stringify(parse(`<div class="grid-container">${table(heading + first + second + third, 'plain')}</div>`)));
 });

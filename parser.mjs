@@ -28251,6 +28251,7 @@ function parseCompendiumGrid(html) {
   const tables = container && attr(container, "class").split(/\s+/).includes("grid-container") ? descendants(container, "table").filter(
     (node2) => attr(node2, "class").split(/\s+/).includes("waffle")
   ) : [table];
+  if (!tables.length) tables.push(table);
   const result = [];
   const occupied = [];
   for (const element of tables.flatMap((sheetTable) => descendants(sheetTable, "tr"))) {
